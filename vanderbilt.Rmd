@@ -1,0 +1,224 @@
+---
+title: "Machine Learning Analysis of Pulmonary Artery Metafeatures"
+author: "Roshan Lodha"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+#  github_document:
+#    toc: true
+#    toc_depth: 2
+#  html_document:
+#    df_print: paged
+#    keep_md: true
+  pdf_document: default
+#abstract: \singlespacing 
+keyword: "radiogenomics"
+---
+
+# Introduction
+```{r setup}
+knitr::opts_chunk$set(warning = FALSE, # turn off warnings
+                      message = FALSE,
+                      results = 'hide') # hide console output
+knitr::opts_chunk$set(fig.width = 10, fig.height = 7) # set figure height and width
+
+pkgs <- c("umap", "readxl", "emulator", "Hmisc", "tidyverse", "glmnet",
+    "ggprism", "ggfortify", "RColorBrewer", "plotly", "viridis", "GGally",
+    "boot", "table1", "papaja",
+    "corrplot")
+
+invisible(lapply(pkgs,
+    function(x) suppressMessages(library(x, character.only = TRUE)))) 
+
+# git token: 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
+```
+
+## Loading Demographic Data
+```{r loading-data}
+ct <- read.csv("./data/vanderbilt/vanderbilt_ct_phenotype_2-14-23.csv",
+               header = TRUE,
+               row.names = 1)
+mri <- read.csv("./data/vanderbilt/vanderbilt_mri_phenotype_2-14-23.csv",
+                header = TRUE,
+                row.names = 1)
+
+ct
+mri
+```
+
+```{r merge-data}
+ct$scan <- "CT"
+mri$scan <- "MRI"
+
+ct <- ct %>% dplyr::select(colnames(mri))
+dem <- rbind(ct, mri)
+dem
+```
+
+```{r dictionary}
+dictionary <- read_csv("./data/vanderbilt/radiogenomics_data_dictionary.csv")
+dictionary
+```
+
+## Table 1
+```{r table1-gender-race-ethnicity}
+dem$gender <- 
+  factor(dem$gender, 
+         levels = c(0, 1, 2),
+         labels = c("Female",
+                    "Male",
+                    "Unknown"))
+dem$race <- 
+  factor(dem$race, 
+         levels = c(0, 1, 2, 3, 4, 5, 6),
+         labels = c("American Indian/Alaska Native",
+                    "Asian",
+                    "Black or African American",
+                    "Native Hawaiian or Other Pacific Islander",
+                    "White",
+                    "Other",
+                    "Declined/Prefer not to answer"))
+
+dem$ethnicity <- 
+  factor(dem$ethnicity, 
+         levels = c(0, 1, 2),
+         labels = c("Hispanic",
+                    "Not Hispanic",
+                    "Declined/Prefer not to answer"))
+```
+
+```{r table1-Hx}
+dem$htn <- 
+  factor(dem$htn, 
+         levels = c(0, 1),
+         labels = c("No Hx of Hypertension",
+                    "Hx of Hypertension"))
+
+dem$diabetes <- 
+  factor(dem$diabetes, 
+         levels = c(0, 1),
+         labels = c("No Hx of Diabetes",
+                    "Hx of Diabetes"))
+
+dem$chf <- 
+  factor(dem$chf, 
+         levels = c(0, 1),
+         labels = c("No Hx of CHF",
+                    "Hx of CHF"))
+
+dem$cad <- 
+  factor(dem$cad, 
+         levels = c(0, 1),
+         labels = c("No Hx of CAD",
+                    "Hx of CAD"))
+#dem$pad <- 
+#  factor(dem$pad, 
+#         levels = c(0, 1),
+#         labels = c("No Hx of PAD",
+#                    "Hx of PAD"))
+
+#dem$mi <- 
+#  factor(dem$mi, 
+#         levels = c(0, 1),
+#         labels = c("No Hx of MI",
+#                    "Hx of MI"))
+
+dem$stroke_tia <- 
+  factor(dem$stroke_tia, 
+         levels = c(0, 1),
+         labels = c("No Hx of Stroke or TIA",
+                    "Hx of Stroke or TIA"))
+
+dem$osa <- 
+  factor(dem$osa, 
+         levels = c(0, 1),
+         labels = c("No Hx of OSA",
+                    "Hx of OSA"))
+```
+
+```{r render-table1, results = 'show'}
+label(dem$scan) <- "Imaging Modality"
+label(dem$gender) <- "Gender"
+label(dem$race) <- "Race"
+label(dem$ethnicity) <- "Ethnicity"
+label(dem$age_ablation) <- "Age at Ablation"
+label(dem$pt_height) <- "Height"
+label(dem$weight) <- "Weight"
+label(dem$htn) <- "History of Hypertension"
+label(dem$diabetes) <- "History of Diabetes"
+label(dem$chf) <- "History of Congestive Heart Failure"
+
+table1 <- table1(~ gender + race + ethnicity + age_ablation + pt_height + weight + htn + diabetes + chf | scan, data = dem)
+
+table1
+```
+
+# Metafeatures Analysis
+## Loading Metafeatures
+```{r loading-metafeatures}
+vandy <- read.csv("./data/vanderbilt/primary_vanderbilt_filtered.csv", 
+                         header = TRUE, 
+                         row.names = 1)
+vandy
+```
+
+## Dimensionality Analysis
+```{r normalization}
+vandy <- vandy[, which(apply(vandy, 2, var) != 0)]
+vandy <- as.matrix(vandy)
+vandy[!is.finite(vandy)] <- NA
+
+vandy <- scale(vandy, center = TRUE, scale = colSums(vandy))
+```
+
+### UMAP Plot
+```{r umap}
+vandy.umap <- umap(na.omit(vandy))
+vandy.umap.df <- merge(as.data.frame(dem), as.data.frame(vandy.umap$layout), by = 0)
+
+vandy.umap.plot <- ggplot(data = vandy.umap.df, aes(x = V1, y = V2, color = scan)) +
+  geom_point(size = 2) +
+  ggtitle("UMAP vs Dataset") +
+  theme_prism()
+#ggsave("./plots/LA.umap.png", plot = LA.umap.plot, height = 6, width = 6)
+vandy.umap.plot
+```
+
+```{r umap-corr}
+summary(glm(as.numeric(la_any_modality) ~ V1 + V2, data = vandy.umap.df))
+```
+
+### PCA Analysis
+```{r pca-comp}
+vandy.pca <- prcomp(na.omit(vandy))
+pca.var.explained <- cumsum(vandy.pca$sdev^2 / sum(vandy.pca$sdev^2))
+```
+
+```{r scree}
+scree.plot <- qplot(c(0:length(pca.var.explained)), c(0, pca.var.explained)) +
+  geom_line() +
+  xlab("Principal Component") +
+  ylab("Variance Explained") +
+  ggtitle("Scree Plot") +
+  geom_hline(yintercept = 0.8) +
+  ylim(0, 1) +
+  theme_prism()
+#ggsave("./plots/LA.scree.png", plot = scree.plot, height = 6, width = 6) #12
+scree.plot
+```
+
+```{r pca}
+vandy.pca.df <- merge(as.data.frame(dem), as.data.frame(vandy.pca$x[,1:44]), by = 0)
+vandy.pca.plot <- ggplot(data = vandy.pca.df, aes(x = PC1, y = PC2, color = factor(scan))) +
+  geom_point(size = 2) +
+  ggtitle("PCA vs Dataset") +
+  theme_prism()
+#ggsave("./plots/LA.pca.png", plot = LA.pca.plot, height = 6, width = 6)
+vandy.pca.plot
+```
+
+### Correlation Between Metafeatures
+```{r metafeature-corr}
+vandy.corr <- cor(vandy)
+#corrplot.mixed(vandy.corr, lower = "number", upper = "circle", order = "hclust", type = "full")
+corrplot(vandy.corr, method = "square", order = "hclust", type = "upper")
+```
